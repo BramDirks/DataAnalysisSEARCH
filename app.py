@@ -204,23 +204,37 @@ if uploaded_file:
 
     with tab1:
 
-        fig = px.scatter_mapbox(
+        fig = px.scatter_map(
             data,
             lat="GPS_0020_Lat",
             lon="GPS_0020_Lon",
             color=sel_sub,
             zoom=19,
-            height=750
+            height=750,
+            color_continuous_scale="Viridis"
         )
 
         fig.update_layout(
-            mapbox_style="satellite-streets",
-            dragmode="lasso"
+            dragmode="lasso",
+            map_style="white-bg",
+            map_layers=[
+                {
+                    "below": "traces",
+                    "sourcetype": "raster",
+                    "source": [
+                        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    ]
+                }
+            ]
         )
 
-        selected = plotly_events(fig,select_event=True)
+        selected = plotly_events(
+            fig,
+            select_event=True,
+            override_height=750
+        )
 
-        st.plotly_chart(fig,use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
         if selected:
 
@@ -235,7 +249,6 @@ if uploaded_file:
                 ).reset_index(drop=True)
 
                 st.rerun()
-
 # ------------------------------------------------
 # POLYGON TOOL
 # ------------------------------------------------
@@ -260,20 +273,30 @@ if uploaded_file:
 
     with tab3:
 
-        heat = px.density_mapbox(
+        heat = px.density_map(
             data,
-            lat="GPS_0020_Lat",
-            lon="GPS_0020_Lon",
-            z=sel_sub,
-            radius=15,
-            zoom=18,
-            height=750
-        )
+        lat="GPS_0020_Lat",
+        lon="GPS_0020_Lon",
+        z=sel_sub,
+        radius=15,
+        zoom=18,
+        height=750
+    )
 
-        heat.update_layout(mapbox_style="satellite-streets")
+        heat.update_layout(
+            map_style="white-bg",
+            map_layers=[
+            {
+                "below": "traces",
+                "sourcetype": "raster",
+                "source": [
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            ]
+        }
+    ]
+)
 
-        st.plotly_chart(heat,use_container_width=True)
-
+st.plotly_chart(heat, use_container_width=True)
 # ------------------------------------------------
 # CONTOUR MAP
 # ------------------------------------------------
