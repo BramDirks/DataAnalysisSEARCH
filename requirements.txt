@@ -3,4 +3,7 @@ pandas
 numpy
 plotly
 scikit-learn
+scipy
 streamlit-plotly-events
+streamlit-folium
+folium
