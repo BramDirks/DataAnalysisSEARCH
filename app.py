@@ -98,9 +98,9 @@ if uploaded_file is not None:
         t1, t2, t3 = st.tabs(["🗺️ Selection Map", "📈 3D View", "📋 Raw Data"])
 
         with t1:
-            st.info("💡 **How to exclude:** Use the **Box Select** or **Lasso Select** tools in the map toolbar. Click individual points to exclude them.")
+            st.info("💡 **How to exclude:** Use the tools in the top right of the map. If the toolbar is hidden, hover your mouse over the top right corner of the map.")
             
-            # Map shows all points, but fades the excluded ones
+            # 1. Create the figure
             fig_map = px.scatter_map(
                 df_f, lat='GPS_0020_Lat', lon='GPS_0020_Lon',
                 color=sel_sub, 
@@ -109,21 +109,36 @@ if uploaded_file is not None:
                 color_continuous_scale="Viridis", height=750,
                 hover_data=['point_id']
             )
+
+            # 2. FORCE THE TOOLBAR TO BE VISIBLE
             fig_map.update_layout(
                 map_style="white-bg",
                 map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
-                clickmode='event+select'
+                clickmode='event+select',
+                dragmode='lasso', # Sets Lasso as the default tool
+                modebar_visible=True # This forces the toolbar to stay visible
             )
             
-            # Capture selection events (This replaces the standard st.plotly_chart)
-            selected_points = plotly_events(fig_map, select_event=True, click_event=True, key="map_select")
+            # 3. Add the selection tools to the configuration
+            # 'select2d' is Box Select, 'lasso2d' is Lasso
+            config = {
+                'displaylogo': False,
+                'modeBarButtonsToAdd': ['select2d', 'lasso2d', 'drawclosedpath', 'eraseshape']
+            }
+
+            # 4. Capture selection events
+            selected_points = plotly_events(
+                fig_map, 
+                select_event=True, 
+                click_event=True, 
+                key="map_select",
+                override_height=750
+            )
 
             if selected_points:
-                # Find the IDs of the selected/clicked points
                 selected_ids = [df_f.iloc[p['pointIndex']]['point_id'] for p in selected_points]
                 st.session_state.excluded_ids.update(selected_ids)
                 st.rerun()
-
         with t2:
             if not active_df.empty:
                 fig_3d = px.scatter_3d(active_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, height=750)
