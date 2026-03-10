@@ -46,7 +46,7 @@ st.sidebar.title("🛠️ Precise Control Panel")
 project_name = st.sidebar.text_input("Project Name", value="New Survey Site")
 
 st.sidebar.divider()
-# CRITICAL: This allows the user to switch between moving the map and selecting points
+# Switch between moving and drawing
 map_mode = st.sidebar.radio("Map Mouse Mode", ["Navigate (Zoom/Pan)", "Select (Lasso/Box)"])
 
 if st.sidebar.button("🔄 Reset All Manual Exclusions"):
@@ -62,17 +62,8 @@ if uploaded_file is not None:
         cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
         sel_sub = st.sidebar.selectbox("Analyze Substance", cols)
 
-        # Coordinate Filters
-        st.sidebar.subheader("📍 Precise Coordinates")
-        in_lat_min = st.sidebar.number_input("Min Lat", value=float(matrix_df['GPS_0020_Lat'].min()), format="%.6f")
-        in_lat_max = st.sidebar.number_input("Max Lat", value=float(matrix_df['GPS_0020_Lat'].max()), format="%.6f")
-        in_lon_min = st.sidebar.number_input("Min Lon", value=float(matrix_df['GPS_0020_Lon'].min()), format="%.6f")
-        in_lon_max = st.sidebar.number_input("Max Lon", value=float(matrix_df['GPS_0020_Lon'].max()), format="%.6f")
-
-        # Logic
+        # Apply Filtering Logic
         df_f = matrix_df.copy()
-        df_f = df_f[df_f['GPS_0020_Lat'].between(in_lat_min, in_lat_max)]
-        df_f = df_f[df_f['GPS_0020_Lon'].between(in_lon_min, in_lon_max)]
         df_f['is_excluded'] = df_f['point_id'].isin(st.session_state.excluded_ids)
         active_df = df_f[~df_f['is_excluded']].dropna(subset=[sel_sub])
 
@@ -83,20 +74,20 @@ if uploaded_file is not None:
 
         with t1:
             if map_mode == "Select (Lasso/Box)":
-                st.warning("⚠️ In **Select Mode**, use your mouse to draw. Switch back to **Navigate** to zoom or move the map.")
+                st.warning("✨ **Lasso Active**: Just click and drag on the map to exclude points.")
             
-            # Use Mapbox (standard for selection tools in Plotly)
+            # Mapbox is required for stable selection tools
             fig_map = px.scatter_mapbox(
                 df_f, lat='GPS_0020_Lat', lon='GPS_0020_Lon',
                 color=sel_sub, 
-                opacity=df_f['is_excluded'].map({True: 0.1, False: 0.9}),
+                opacity=df_f['is_excluded'].map({True: 0.15, False: 0.9}),
                 size_max=12, zoom=18,
                 color_continuous_scale="Viridis", height=750,
                 hover_data=['point_id']
             )
 
-            # FORCE TOOLS
-            drag_mode = 'lasso' if map_mode == "Select (Lasso/Box)" else 'pan'
+            # Determine drag mode based on sidebar selection
+            active_drag_mode = 'lasso' if map_mode == "Select (Lasso/Box)" else 'pan'
             
             fig_map.update_layout(
                 mapbox_style="white-bg",
@@ -105,22 +96,29 @@ if uploaded_file is not None:
                     "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]
                 }],
                 margin={"r":0,"t":0,"l":0,"b":0},
-                dragmode=drag_mode,
-                modebar_visible=True,
+                dragmode=active_drag_mode,
+                modebar_visible=True, # FORCES toolbar to show
                 clickmode='event+select'
             )
 
-            # This tells Plotly to put the Lasso/Box icons back in the bar
+            # Define the configuration to FORCE the display of the modebar
+            map_config = {
+                'displayModeBar': True, # ALWAYS show the bar
+                'modeBarButtonsToAdd': ['lasso2d', 'select2d'], # Explicitly add Lasso and Box
+                'displaylogo': False
+            }
+
+            # Render map with custom configuration
             selected_points = plotly_events(
                 fig_map, 
                 select_event=True, 
                 click_event=True, 
-                key=f"map_{map_mode}", # Key changes to force refresh on mode switch
-                override_height=750
+                key=f"map_{map_mode}", 
+                override_height=750,
+                override_width='100%'
             )
 
             if selected_points:
-                # Map the selection back to point IDs
                 selected_ids = [df_f.iloc[p['pointIndex']]['point_id'] for p in selected_points]
                 st.session_state.excluded_ids.update(selected_ids)
                 st.rerun()
@@ -131,9 +129,8 @@ if uploaded_file is not None:
                 st.plotly_chart(fig_3d, use_container_width=True)
 
         with t3:
-            st.subheader("Final Filtered Matrix")
+            st.subheader("Data Matrix")
             st.dataframe(active_df, use_container_width=True)
-            st.download_button("Export Clean CSV", active_df.to_csv(index=False).encode('utf-8'), f"{project_name}_clean.csv")
 
 else:
     st.info("👋 Upload a .json file to start.")
