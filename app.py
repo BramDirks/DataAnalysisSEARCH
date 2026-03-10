@@ -6,7 +6,7 @@ import numpy as np
 import os
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="High-Precision Sensor Analysis", layout="wide")
+st.set_page_config(page_title="High-Precision Grave Analysis", layout="wide")
 
 @st.cache_data
 def load_and_process_data(uploaded_file):
@@ -30,15 +30,12 @@ def load_and_process_data(uploaded_file):
     
     if not all_data: return None
     df = pd.DataFrame(all_data)
-    # Time processing
-    df['DateTime'] = pd.to_datetime(df['vT'], unit='ms')
     df['Time_Sec'] = (df['vT'] / 1000).round().astype(int)
     return df.groupby('Time_Sec').first().reset_index()
 
 # --- SIDEBAR GUI ---
 st.sidebar.title("🛠️ Precise Control Panel")
-
-uploaded_file = st.sidebar.file_uploader("Upload .json data", type=["json"])
+uploaded_file = st.sidebar.file_uploader("Upload .json data file", type=["json"])
 
 if uploaded_file is not None:
     matrix_df = load_and_process_data(uploaded_file)
@@ -46,79 +43,73 @@ if uploaded_file is not None:
     if matrix_df is not None:
         st.sidebar.success("Data Loaded!")
         
-        # 1. SUBSTANCE SELECTION
+        # 1. Substance Selection
         cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
         sel_sub = st.sidebar.selectbox("Analyze Substance", cols)
 
         st.sidebar.divider()
-        
-        # 2. MANUAL COORDINATE INPUTS (Replacing Sliders)
-        st.sidebar.subheader("📍 Precise Coordinates")
-        c1, c2 = st.sidebar.columns(2)
-        min_lat = c1.number_input("Min Lat", value=float(matrix_df['GPS_0020_Lat'].min()), format="%.6f")
-        max_lat = c2.number_input("Max Lat", value=float(matrix_df['GPS_0020_Lat'].max()), format="%.6f")
-        
-        c3, c4 = st.sidebar.columns(2)
-        min_lon = c3.number_input("Min Lon", value=float(matrix_df['GPS_0020_Lon'].min()), format="%.6f")
-        max_lon = c4.number_input("Max Lon", value=float(matrix_df['GPS_0020_Lon'].max()), format="%.6f")
+
+        # 2. High-Precision Numerical Inputs (replacing sliders)
+        st.sidebar.subheader("📍 Precise Latitude")
+        min_lat_val = float(matrix_df['GPS_0020_Lat'].min())
+        max_lat_val = float(matrix_df['GPS_0020_Lat'].max())
+        in_lat_min = st.sidebar.number_input("Min Latitude", value=min_lat_val, format="%.6f", step=0.00001)
+        in_lat_max = st.sidebar.number_input("Max Latitude", value=max_lat_val, format="%.6f", step=0.00001)
+
+        st.sidebar.subheader("📍 Precise Longitude")
+        min_lon_val = float(matrix_df['GPS_0020_Lon'].min())
+        max_lon_val = float(matrix_df['GPS_0020_Lon'].max())
+        in_lon_min = st.sidebar.number_input("Min Longitude", value=min_lon_val, format="%.6f", step=0.00001)
+        in_lon_max = st.sidebar.number_input("Max Longitude", value=max_lon_val, format="%.6f", step=0.00001)
 
         st.sidebar.divider()
 
-        # 3. ADVANCED FILTERS
+        # 3. Additional Advanced Filters
         st.sidebar.subheader("📏 Altitude & Speed")
-        c5, c6 = st.sidebar.columns(2)
-        h_min = c5.number_input("Min Height (m)", value=0.0)
-        h_max = c6.number_input("Max Height (m)", value=60.0)
+        h_min = st.sidebar.number_input("Min Height (m)", value=0.0, step=0.1)
+        h_max = st.sidebar.number_input("Max Height (m)", value=60.0, step=0.1)
         
         speed_col = 'GPS_0020_gSpeed'
+        s_min, s_max = 0.0, 10.0
         if speed_col in matrix_df.columns:
-            s_min = st.sidebar.number_input("Min Ground Speed (m/s)", value=0.0)
-            s_max = st.sidebar.number_input("Max Ground Speed (m/s)", value=5.0)
+            s_min = st.sidebar.number_input("Min Speed (m/s)", value=0.0, step=0.1)
+            s_max = st.sidebar.number_input("Max Speed (m/s)", value=float(matrix_df[speed_col].max()), step=0.1)
 
-        st.sidebar.subheader("✨ Data Cleaning")
-        # Percentile filter to remove noise/outliers
-        p_low, p_high = st.sidebar.select_slider(
-            "Filter Concentration Percentile (Remove Outliers)",
-            options=list(range(0, 101)),
-            value=(0, 100)
-        )
+        st.sidebar.subheader("✨ Noise Filtering")
+        p_range = st.sidebar.slider("Concentration Percentile (Remove Spikes)", 0, 100, (0, 100))
 
-        # --- APPLY FILTERS ---
+        # --- APPLY ALL FILTERS ---
         df_f = matrix_df.copy()
-        
-        # Apply Logic
-        df_f = df_f[df_f['GPS_0020_Lat'].between(min_lat, max_lat)]
-        df_f = df_f[df_f['GPS_0020_Lon'].between(min_lon, max_lon)]
+        df_f = df_f[df_f['GPS_0020_Lat'].between(in_lat_min, in_lat_max)]
+        df_f = df_f[df_f['GPS_0020_Lon'].between(in_lon_min, in_lon_max)]
         df_f = df_f[df_f['GPS_0020_Height'].between(h_min, h_max)]
         
         if speed_col in df_f.columns:
             df_f = df_f[df_f[speed_col].between(s_min, s_max)]
 
-        # Percentile Filter
         if not df_f.empty:
-            low_val = np.percentile(df_f[sel_sub].dropna(), p_low)
-            high_val = np.percentile(df_f[sel_sub].dropna(), p_high)
-            df_f = df_f[df_f[sel_sub].between(low_val, high_val)]
+            low_p = np.percentile(df_f[sel_sub].dropna(), p_range[0])
+            high_p = np.percentile(df_f[sel_sub].dropna(), p_range[1])
+            df_f = df_f[df_f[sel_sub].between(low_p, high_p)]
 
         plot_df = df_f.dropna(subset=['GPS_0020_Lat', 'GPS_0020_Lon', sel_sub])
 
-        # --- MAIN DASHBOARD ---
-        st.title("⚰️ Archaeological Survey Dashboard")
+        # --- DASHBOARD ---
+        st.title("⚰️ Grave Detection & Analysis Dashboard")
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Points", len(plot_df))
-        m2.metric("Mean Conc", round(plot_df[sel_sub].mean(), 3) if not plot_df.empty else 0)
-        m3.metric("Max Conc", round(plot_df[sel_sub].max(), 3) if not plot_df.empty else 0)
+        m1.metric("Points Found", len(plot_df))
+        m2.metric("Avg Conc", f"{plot_df[sel_sub].mean():.3f}" if not plot_df.empty else "0")
+        m3.metric("Max Conc", f"{plot_df[sel_sub].max():.3f}" if not plot_df.empty else "0")
 
-        t1, t2, t3 = st.tabs(["🗺️ High-Res Map", "📈 3D Profile", "📋 Data Table"])
+        t1, t2, t3 = st.tabs(["🗺️ Satellite Map", "📈 3D View", "📋 Raw Data"])
 
         with t1:
             if not plot_df.empty:
-                # We use scatter_map for high precision
                 fig_map = px.scatter_map(
                     plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon',
-                    color=sel_sub, size_max=12, zoom=18,
-                    color_continuous_scale="Viridis", height=700
+                    color=sel_sub, size_max=12, zoom=19,
+                    color_continuous_scale="Viridis", height=750
                 )
                 fig_map.update_layout(
                     map_style="white-bg",
@@ -128,19 +119,17 @@ if uploaded_file is not None:
                     }]
                 )
                 st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.info("No points match the selected filters.")
 
         with t2:
             if not plot_df.empty:
-                fig_3d = px.scatter_3d(
-                    plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub,
-                    color=sel_sub, color_continuous_scale="Viridis", height=700
-                )
+                fig_3d = px.scatter_3d(plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, height=750)
                 st.plotly_chart(fig_3d, use_container_width=True)
 
         with t3:
-            st.dataframe(plot_df)
-            st.download_button("Export Processed CSV", plot_df.to_csv(index=False), "survey_data.csv")
-    else:
-        st.error("The uploaded file could not be parsed.")
+            st.dataframe(plot_df, use_container_width=True)
+            st.download_button("Export as CSV", plot_df.to_csv(index=False), "survey_data.csv")
+
 else:
-    st.info("👋 Upload a .json file to begin. Use the number boxes for sub-meter precision.")
+    st.info("👋 Please upload your .json file in the sidebar to begin high-precision analysis.")
