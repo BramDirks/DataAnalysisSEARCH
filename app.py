@@ -77,7 +77,7 @@ if uploaded_file is not None:
         plot_df = df_f.dropna(subset=['GPS_0020_Lat', 'GPS_0020_Lon', sel_sub])
 
         # --- MAIN DASHBOARD ---
-        st.title("☢️ Radiation Survey Dashboard")
+        st.title("Concentration Survey Dashboard")
         
         m1, m2, m3 = st.columns(3)
         m1.metric("Points", len(plot_df))
