@@ -13,6 +13,7 @@ st.set_page_config(page_title="Grave Detection Analysis", layout="wide")
 @st.cache_data
 def load_and_process_data(uploaded_file):
     all_data = []
+    # Read the uploaded file line by line
     for line in uploaded_file:
         line = line.decode("utf-8").strip()
         if not line: continue
@@ -42,17 +43,21 @@ if uploaded_file is not None:
     matrix_df = load_and_process_data(uploaded_file)
     if matrix_df is not None:
         st.sidebar.success("Data Loaded!")
+        
+        # Get substances (columns with STABSPECTRO)
         cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
         sel_sub = st.sidebar.selectbox("Substance (e.g. K40)", cols)
 
         st.sidebar.subheader("Precision Filters")
-        lat_range = st.sidebar.slider("Lat", 50.0, 54.0, (matrix_df['GPS_0020_Lat'].min(), matrix_df['GPS_0020_Lat'].max()), step=0.00001)
-        lon_range = st.sidebar.slider("Lon", 3.0, 8.0, (matrix_df['GPS_0020_Lon'].min(), matrix_df['GPS_0020_Lon'].max()), step=0.00001)
+        lat_min, lat_max = float(matrix_df['GPS_0020_Lat'].min()), float(matrix_df['GPS_0020_Lat'].max())
+        lon_min, lon_max = float(matrix_df['GPS_0020_Lon'].min()), float(matrix_df['GPS_0020_Lon'].max())
         
-        h_range = st.sidebar.slider("Height (m)", 0, 100, (0, 55))
+        lat_range = st.sidebar.slider("Lat", lat_min, lat_max, (lat_min, lat_max), format="%.5f")
+        lon_range = st.sidebar.slider("Lon", lon_min, lon_max, (lon_min, lon_max), format="%.5f")
+        h_range = st.sidebar.slider("Height (m)", 0, 100, (0, 60))
         
-        st.sidebar.subheader("Grid Settings")
-        grid_res = st.sidebar.number_input("Bin Resolution (meters)", value=1.0, min_value=0.1, step=0.1)
+        st.sidebar.subheader("Map Settings")
+        grid_res = st.sidebar.slider("Grid Resolution (approx meters)", 0.1, 5.0, 1.0, 0.1)
 
         # --- APPLY FILTERS ---
         df_f = matrix_df[
@@ -65,39 +70,58 @@ if uploaded_file is not None:
 
         # --- MAIN TABS ---
         st.title("⚰️ Archaeological Survey Dashboard")
-        t1, t2, t3, t4, t5 = st.tabs(["🗺️ Raw Map", "⬢ Hexbin (Precise)", "⬛ Square Bin", "🔥 Fluid (Interpolated)", "📈 3D"])
+        t1, t2, t3, t4, t5 = st.tabs(["🗺️ Raw Map", "⬢ Hexbin Density", "⬛ Square Grid", "🔥 Fluid (Interpolated)", "📈 3D View"])
+
+        # ESRI Satellite Tile Source
+        esri_satellite = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
         with t1:
-            fig_map = px.scatter_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', color=sel_sub, size_max=10, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_map.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}])
-            st.plotly_chart(fig_map, use_container_width=True)
+            st.subheader("Direct Measurements")
+            fig_raw = px.scatter_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', color=sel_sub, size_max=10, zoom=18, color_continuous_scale="Viridis", height=700)
+            fig_raw.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
+            st.plotly_chart(fig_raw, use_container_width=True)
 
         with t2:
-            st.subheader("Hexagonal Binning")
-            st.info("Aggregates data into hexagons. No invented data; white areas mean no measurement.")
-            # Using density_map with high radius/low zoom behaves like a precise binning tool
-            fig_hex = px.density_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', z=sel_sub, radius=10, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_hex.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}])
+            st.subheader("Hexbin Density (Precise)")
+            # Using density_map is the modern replacement for hexbinning in Plotly maps
+            fig_hex = px.density_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', z=sel_sub, radius=15, zoom=18, color_continuous_scale="Viridis", height=700)
+            fig_hex.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
             st.plotly_chart(fig_hex, use_container_width=True)
 
         with t3:
             st.subheader("Square Grid Aggregation")
-            # Round coordinates to create a grid (approximate meters)
-            grid_val = 0.00001 * grid_res 
+            # Rounding coordinates to create a grid. 0.00001 lat is roughly 1.1 meters.
+            step = 0.00001 * grid_res
             df_grid = plot_df.copy()
-            df_grid['Lat_Grid'] = (df_grid['GPS_0020_Lat'] / grid_val).round() * grid_val
-            df_grid['Lon_Grid'] = (df_grid['GPS_0020_Lon'] / grid_val).round() * grid_val
-            df_grid = df_grid.groupby(['Lat_Grid', 'Lon_Grid'])[sel_sub].mean().reset_index()
+            df_grid['Lat_G'] = (df_grid['GPS_0020_Lat'] / step).round() * step
+            df_grid['Lon_G'] = (df_grid['GPS_0020_Lon'] / step).round() * step
+            df_grid = df_grid.groupby(['Lat_G', 'Lon_G'])[sel_sub].mean().reset_index()
             
-            fig_sq = px.scatter_map(df_grid, lat='Lat_Grid', lon='Lon_Grid', color=sel_sub, symbol_sequence=['square'], size_max=15, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_sq.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}])
+            fig_sq = px.scatter_map(df_grid, lat='Lat_G', lon='Lon_G', color=sel_sub, size_max=12, zoom=18, color_continuous_scale="Viridis", height=700)
+            fig_sq.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
             st.plotly_chart(fig_sq, use_container_width=True)
 
         with t4:
-            st.subheader("Interpolated (Fluid) Mode")
-            # [The interpolation code from previous turn goes here]
-            st.warning("Warning: This mode creates 'fluid' transitions by inventing data between your paths.")
+            st.subheader("Interpolated Fluid Heatmap")
+            if len(plot_df) > 10:
+                res = 150 # Grid resolution
+                x, y, z = plot_df['GPS_0020_Lon'].values, plot_df['GPS_0020_Lat'].values, plot_df[sel_sub].values
+                grid_x, grid_y = np.mgrid[x.min():x.max():complex(res), y.min():y.max():complex(res)]
+                grid_z = griddata((x, y), z, (grid_x, grid_y), method='linear')
+                grid_z = gaussian_filter(grid_z, sigma=1.5) # Slight blur for fluidity
+                
+                # Flatten back to dataframe for plotting
+                df_interp = pd.DataFrame({'Lon': grid_x.flatten(), 'Lat': grid_y.flatten(), 'Val': grid_z.flatten()}).dropna()
+                fig_int = px.density_map(df_interp, lat='Lat', lon='Lon', z='Val', radius=5, zoom=18, color_continuous_scale="Viridis", height=700)
+                fig_int.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
+                st.plotly_chart(fig_int, use_container_width=True)
+            else:
+                st.info("Insufficient data points for interpolation.")
 
         with t5:
-            fig_3d = px.scatter_3d(plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, height=700)
+            st.subheader("3D Concentration Profiles")
+            fig_3d = px.scatter_3d(plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, color_continuous_scale="Viridis", height=700)
             st.plotly_chart(fig_3d, use_container_width=True)
+
+else:
+    st.info("👋 Please upload a .json file in the sidebar to begin.")
