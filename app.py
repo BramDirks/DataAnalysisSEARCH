@@ -3,24 +3,32 @@ import json
 import pandas as pd
 import plotly.express as px
 import numpy as np
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 from streamlit_plotly_events import plotly_events
 
-st.set_page_config(page_title="Grave Analysis Dashboard", layout="wide")
+st.set_page_config(page_title="Forensic Survey Dashboard", layout="wide")
 
-# --- DATA LOADER ---
+# -----------------------
+# DATA LOADING
+# -----------------------
+
 @st.cache_data
 def load_and_process_data(uploaded_file):
 
     all_data = []
+
     uploaded_file.seek(0)
 
     for line in uploaded_file:
+
         line = line.decode("utf-8").strip()
 
         if not line:
             continue
 
         try:
+
             sensors = json.loads(line)
 
             for sensor in sensors:
@@ -37,6 +45,7 @@ def load_and_process_data(uploaded_file):
                             row[f"{sensor['eID']}_{k}"] = v
 
                     else:
+
                         row[f"{sensor['eID']}_val"] = val
 
                     all_data.append(row)
@@ -56,185 +65,209 @@ def load_and_process_data(uploaded_file):
     return df
 
 
-# --- SIDEBAR ---
-st.sidebar.title("🛠️ Precise Control Panel")
+# -----------------------
+# SIDEBAR
+# -----------------------
 
-project_name = st.sidebar.text_input("Project Name", value="New Survey Site")
+st.sidebar.title("Survey Controls")
 
-uploaded_file = st.sidebar.file_uploader("Upload .json data file", type=["json"])
+project_name = st.sidebar.text_input("Project Name", "Forensic Survey")
 
-if uploaded_file is not None:
+uploaded_file = st.sidebar.file_uploader("Upload JSON Data", type=["json"])
+
+if uploaded_file:
 
     matrix_df = load_and_process_data(uploaded_file)
 
-    if matrix_df is not None:
+    if matrix_df is None:
+        st.error("No usable data found")
+        st.stop()
 
-        st.sidebar.success("Data Loaded Successfully!")
+    st.sidebar.success("Data loaded")
 
-        cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
+    cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c]
 
-        sel_sub = st.sidebar.selectbox("Analyze Substance", cols)
+    sel_sub = st.sidebar.selectbox("Substance", cols)
 
-        st.sidebar.divider()
+    # AREA FILTER
 
-        st.sidebar.subheader("📍 Area of Interest")
+    min_lat = float(matrix_df['GPS_0020_Lat'].min())
+    max_lat = float(matrix_df['GPS_0020_Lat'].max())
 
-        min_lat_val = float(matrix_df['GPS_0020_Lat'].min())
-        max_lat_val = float(matrix_df['GPS_0020_Lat'].max())
+    min_lon = float(matrix_df['GPS_0020_Lon'].min())
+    max_lon = float(matrix_df['GPS_0020_Lon'].max())
 
-        in_lat_min = st.sidebar.number_input("Min Latitude", value=min_lat_val, format="%.6f")
-        in_lat_max = st.sidebar.number_input("Max Latitude", value=max_lat_val, format="%.6f")
+    lat_min = st.sidebar.number_input("Min Latitude", value=min_lat, format="%.6f")
+    lat_max = st.sidebar.number_input("Max Latitude", value=max_lat, format="%.6f")
 
-        min_lon_val = float(matrix_df['GPS_0020_Lon'].min())
-        max_lon_val = float(matrix_df['GPS_0020_Lon'].max())
+    lon_min = st.sidebar.number_input("Min Longitude", value=min_lon, format="%.6f")
+    lon_max = st.sidebar.number_input("Max Longitude", value=max_lon, format="%.6f")
 
-        in_lon_min = st.sidebar.number_input("Min Longitude", value=min_lon_val, format="%.6f")
-        in_lon_max = st.sidebar.number_input("Max Longitude", value=max_lon_val, format="%.6f")
+    df = matrix_df.copy()
 
-        st.sidebar.divider()
+    df = df[df['GPS_0020_Lat'].between(lat_min, lat_max)]
+    df = df[df['GPS_0020_Lon'].between(lon_min, lon_max)]
 
-        st.sidebar.subheader("📏 Altitude & Speed")
+    plot_df = df.dropna(subset=['GPS_0020_Lat', 'GPS_0020_Lon', sel_sub])
 
-        h_min = st.sidebar.number_input("Min Height (m)", value=0.0)
-        h_max = st.sidebar.number_input("Max Height (m)", value=60.0)
+    if "active_df" not in st.session_state:
+        st.session_state.active_df = plot_df.copy()
 
-        speed_col = 'GPS_0020_gSpeed'
+    data = st.session_state.active_df
 
-        s_min = 0.0
-        s_max = 10.0
+# -----------------------
+# AI DETECTION
+# -----------------------
 
-        if speed_col in matrix_df.columns:
-            s_max = float(matrix_df[speed_col].max())
+    st.sidebar.subheader("AI Detection")
 
-            s_min = st.sidebar.number_input("Min Walking Speed", value=0.0)
-            s_max = st.sidebar.number_input("Max Walking Speed", value=s_max)
+    run_cluster = st.sidebar.checkbox("Detect Clusters")
 
-        st.sidebar.subheader("✨ Noise Reduction")
+    run_anomaly = st.sidebar.checkbox("Detect Anomalies")
 
-        p_range = st.sidebar.slider("Concentration Percentile", 0, 100, (0, 100))
+    if run_cluster:
 
-        df_f = matrix_df.copy()
+        coords = data[['GPS_0020_Lat','GPS_0020_Lon']]
 
-        df_f = df_f[df_f['GPS_0020_Lat'].between(in_lat_min, in_lat_max)]
-        df_f = df_f[df_f['GPS_0020_Lon'].between(in_lon_min, in_lon_max)]
+        scaler = StandardScaler()
 
-        df_f = df_f[df_f['GPS_0020_Height'].between(h_min, h_max)]
+        X = scaler.fit_transform(coords)
 
-        if speed_col in df_f.columns:
-            df_f = df_f[df_f[speed_col].between(s_min, s_max)]
+        db = DBSCAN(eps=0.3, min_samples=5).fit(X)
 
-        if not df_f.empty:
+        data['cluster'] = db.labels_
 
-            low_p = np.percentile(df_f[sel_sub].dropna(), p_range[0])
-            high_p = np.percentile(df_f[sel_sub].dropna(), p_range[1])
+    else:
 
-            df_f = df_f[df_f[sel_sub].between(low_p, high_p)]
+        data['cluster'] = -1
 
-        plot_df = df_f.dropna(subset=['GPS_0020_Lat', 'GPS_0020_Lon', sel_sub])
+    if run_anomaly:
 
-        if "active_df" not in st.session_state:
-            st.session_state.active_df = plot_df.copy()
+        z = np.abs((data[sel_sub] - data[sel_sub].mean()) / data[sel_sub].std())
 
-        st.title(f"⚰️ {project_name}")
+        data['anomaly'] = z > 2.5
 
-        m1, m2, m3 = st.columns(3)
+    else:
 
-        m1.metric("Points Found", len(st.session_state.active_df))
+        data['anomaly'] = False
 
-        if not st.session_state.active_df.empty:
+# -----------------------
+# DASHBOARD
+# -----------------------
 
-            m2.metric("Avg Concentration", f"{st.session_state.active_df[sel_sub].mean():.3f}")
-            m3.metric("Max Concentration", f"{st.session_state.active_df[sel_sub].max():.3f}")
+    st.title(project_name)
 
-        else:
-            m2.metric("Avg Concentration", "0")
-            m3.metric("Max Concentration", "0")
+    c1,c2,c3 = st.columns(3)
 
-        t1, t2, t3 = st.tabs(["🗺️ Satellite Map", "📈 3D View", "📋 Raw Data"])
+    c1.metric("Points",len(data))
+    c2.metric("Average",round(data[sel_sub].mean(),3))
+    c3.metric("Max",round(data[sel_sub].max(),3))
 
-        # --- SATELLITE MAP ---
-        with t1:
+# -----------------------
+# TABS
+# -----------------------
 
-            if not st.session_state.active_df.empty:
+    t1,t2,t3,t4 = st.tabs([
+        "Satellite Map",
+        "Heatmap",
+        "3D View",
+        "Raw Data"
+    ])
 
-                fig_map = px.scatter_map(
-                    st.session_state.active_df,
-                    lat='GPS_0020_Lat',
-                    lon='GPS_0020_Lon',
-                    color=sel_sub,
-                    zoom=19,
-                    height=750,
-                    color_continuous_scale="Viridis"
-                )
+# -----------------------
+# MAP
+# -----------------------
 
-                fig_map.update_layout(
-                    map_style="white-bg",
-                    dragmode="lasso",
-                    map_layers=[{
-                        "below": 'traces',
-                        "sourcetype": "raster",
-                        "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]
-                    }]
-                )
+    with t1:
 
-                selected_points = plotly_events(
-                    fig_map,
-                    select_event=True,
-                    override_height=750
-                )
-
-                st.plotly_chart(fig_map, use_container_width=True)
-
-                if selected_points:
-
-                    st.warning(f"{len(selected_points)} points selected")
-
-                    if st.button("❌ Remove Selected Points"):
-
-                        idx = [p["pointIndex"] for p in selected_points]
-
-                        st.session_state.active_df = st.session_state.active_df.drop(
-                            st.session_state.active_df.index[idx]
-                        ).reset_index(drop=True)
-
-                        st.success("Points removed")
-
-                        st.rerun()
-
-        # --- 3D VIEW ---
-        with t2:
-
-            if not st.session_state.active_df.empty:
-
-                fig_3d = px.scatter_3d(
-                    st.session_state.active_df,
-                    x='GPS_0020_Lon',
-                    y='GPS_0020_Lat',
-                    z=sel_sub,
-                    color=sel_sub,
-                    height=750,
-                    color_continuous_scale="Viridis"
-                )
-
-                st.plotly_chart(fig_3d, use_container_width=True)
-
-        # --- RAW DATA ---
-        with t3:
-
-            st.dataframe(st.session_state.active_df, use_container_width=True)
-
-        # --- EXPORT ---
-        st.sidebar.divider()
-
-        csv_data = st.session_state.active_df.to_csv(index=False).encode('utf-8')
-
-        st.sidebar.download_button(
-            "Download Filtered CSV",
-            csv_data,
-            file_name="filtered_data.csv",
-            mime="text/csv"
+        fig = px.scatter_mapbox(
+            data,
+            lat='GPS_0020_Lat',
+            lon='GPS_0020_Lon',
+            color=sel_sub,
+            zoom=19,
+            height=750,
+            mapbox_style="satellite-streets"
         )
+
+        fig.update_layout(dragmode="lasso")
+
+        selected = plotly_events(
+            fig,
+            select_event=True
+        )
+
+        st.plotly_chart(fig,use_container_width=True)
+
+        if selected:
+
+            st.warning(f"{len(selected)} points selected")
+
+            if st.button("Remove selected"):
+
+                idx = [p["pointIndex"] for p in selected]
+
+                st.session_state.active_df = st.session_state.active_df.drop(
+                    st.session_state.active_df.index[idx]
+                )
+
+                st.rerun()
+
+# -----------------------
+# HEATMAP
+# -----------------------
+
+    with t2:
+
+        heat = px.density_mapbox(
+            data,
+            lat='GPS_0020_Lat',
+            lon='GPS_0020_Lon',
+            z=sel_sub,
+            radius=15,
+            zoom=18,
+            mapbox_style="satellite-streets"
+        )
+
+        st.plotly_chart(heat,use_container_width=True)
+
+# -----------------------
+# 3D
+# -----------------------
+
+    with t3:
+
+        fig3d = px.scatter_3d(
+            data,
+            x='GPS_0020_Lon',
+            y='GPS_0020_Lat',
+            z=sel_sub,
+            color=sel_sub
+        )
+
+        st.plotly_chart(fig3d,use_container_width=True)
+
+# -----------------------
+# TABLE
+# -----------------------
+
+    with t4:
+
+        st.dataframe(data)
+
+# -----------------------
+# EXPORT
+# -----------------------
+
+    csv = data.to_csv(index=False).encode()
+
+    st.sidebar.download_button(
+        "Export CSV",
+        csv,
+        "filtered_data.csv",
+        "text/csv"
+    )
 
 else:
 
-    st.info("👋 Upload your .json survey file to begin analysis.")
+    st.info("Upload JSON data to begin.")
