@@ -8,12 +8,11 @@ from scipy.ndimage import gaussian_filter
 import os
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Grave Detection Analysis", layout="wide")
+st.set_page_config(page_title="Sensor Data Analysis", layout="wide")
 
 @st.cache_data
 def load_and_process_data(uploaded_file):
     all_data = []
-    # Read the uploaded file line by line
     for line in uploaded_file:
         line = line.decode("utf-8").strip()
         if not line: continue
@@ -35,93 +34,89 @@ def load_and_process_data(uploaded_file):
     df['Time_Sec'] = (df['vT'] / 1000).round().astype(int)
     return df.groupby('Time_Sec').first().reset_index()
 
-# --- SIDEBAR ---
+# --- SIDEBAR GUI ---
 st.sidebar.title("🛠️ Control Panel")
-uploaded_file = st.sidebar.file_uploader("Upload .json data", type=["json"])
+uploaded_file = st.sidebar.file_uploader("Upload your .json data file", type=["json"])
 
 if uploaded_file is not None:
     matrix_df = load_and_process_data(uploaded_file)
     if matrix_df is not None:
         st.sidebar.success("Data Loaded!")
-        
-        # Get substances (columns with STABSPECTRO)
         cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
-        sel_sub = st.sidebar.selectbox("Substance (e.g. K40)", cols)
+        sel_sub = st.sidebar.selectbox("Analyze Substance", cols)
 
-        st.sidebar.subheader("Precision Filters")
-        lat_min, lat_max = float(matrix_df['GPS_0020_Lat'].min()), float(matrix_df['GPS_0020_Lat'].max())
-        lon_min, lon_max = float(matrix_df['GPS_0020_Lon'].min()), float(matrix_df['GPS_0020_Lon'].max())
+        st.sidebar.subheader("Filters")
+        lat_range = st.sidebar.slider("Lat Range", 50.0, 54.0, (matrix_df['GPS_0020_Lat'].min(), matrix_df['GPS_0020_Lat'].max()), step=0.0001)
+        lon_range = st.sidebar.slider("Lon Range", 3.0, 8.0, (matrix_df['GPS_0020_Lon'].min(), matrix_df['GPS_0020_Lon'].max()), step=0.0001)
         
-        lat_range = st.sidebar.slider("Lat", lat_min, lat_max, (lat_min, lat_max), format="%.5f")
-        lon_range = st.sidebar.slider("Lon", lon_min, lon_max, (lon_min, lon_max), format="%.5f")
-        h_range = st.sidebar.slider("Height (m)", 0, 100, (0, 60))
+        use_h = st.sidebar.checkbox("Filter Height", value=True)
+        h_range = st.sidebar.slider("Height (m)", 0, 100, (0, 55))
         
-        st.sidebar.subheader("Map Settings")
-        grid_res = st.sidebar.slider("Grid Resolution (approx meters)", 0.1, 5.0, 1.0, 0.1)
+        # Heatmap specific controls
+        st.sidebar.subheader("Heatmap Settings")
+        blur = st.sidebar.slider("Smoothing (Blur)", 0.0, 5.0, 1.5)
+        res = st.sidebar.slider("Resolution", 50, 300, 150)
 
         # --- APPLY FILTERS ---
         df_f = matrix_df[
             (matrix_df['GPS_0020_Lat'].between(lat_range[0], lat_range[1])) &
-            (matrix_df['GPS_0020_Lon'].between(lon_range[0], lon_range[1])) &
-            (matrix_df['GPS_0020_Height'].between(h_range[0], h_range[1]))
+            (matrix_df['GPS_0020_Lon'].between(lon_range[0], lon_range[1]))
         ].copy()
+        if use_h and 'GPS_0020_Height' in df_f.columns:
+            df_f = df_f[df_f['GPS_0020_Height'].between(h_range[0], h_range[1])]
 
         plot_df = df_f.dropna(subset=['GPS_0020_Lat', 'GPS_0020_Lon', sel_sub])
 
-        # --- MAIN TABS ---
-        st.title("⚰️ Archaeological Survey Dashboard")
-        t1, t2, t3, t4, t5 = st.tabs(["🗺️ Raw Map", "⬢ Hexbin Density", "⬛ Square Grid", "🔥 Fluid (Interpolated)", "📈 3D View"])
-
-        # ESRI Satellite Tile Source
-        esri_satellite = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        st.title("Concentration Survey Dashboard")
+        t1, t2, t3, t4 = st.tabs(["🗺️ Map", "🔥 Interpolated Heatmap", "📈 3D View", "📋 Table"])
 
         with t1:
-            st.subheader("Direct Measurements")
-            fig_raw = px.scatter_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', color=sel_sub, size_max=10, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_raw.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
-            st.plotly_chart(fig_raw, use_container_width=True)
+            if not plot_df.empty:
+                fig_map = px.scatter_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', color=sel_sub, size_max=15, zoom=14, color_continuous_scale="Viridis", height=600)
+                fig_map.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}])
+                st.plotly_chart(fig_map, use_container_width=True)
 
         with t2:
-            st.subheader("Hexbin Density (Precise)")
-            # Using density_map is the modern replacement for hexbinning in Plotly maps
-            fig_hex = px.density_map(plot_df, lat='GPS_0020_Lat', lon='GPS_0020_Lon', z=sel_sub, radius=15, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_hex.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
-            st.plotly_chart(fig_hex, use_container_width=True)
+            st.subheader("Fluid Heatmap (Linear Interpolation)")
+            if len(plot_df) > 10:
+                # Prepare grid
+                x = plot_df['GPS_0020_Lon'].values
+                y = plot_df['GPS_0020_Lat'].values
+                z = plot_df[sel_sub].values
+                
+                grid_x, grid_y = np.mgrid[x.min():x.max():complex(res), y.min():y.max():complex(res)]
+                
+                # Interpolate
+                grid_z = griddata((x, y), z, (grid_x, grid_y), method='linear')
+                
+                # Smooth
+                if blur > 0:
+                    grid_z = gaussian_filter(grid_z, sigma=blur)
+
+                # Convert grid back to long-form for Plotly
+                grid_df = pd.DataFrame({
+                    'Lon': grid_x.flatten(),
+                    'Lat': grid_y.flatten(),
+                    'Conc': grid_z.flatten()
+                }).dropna()
+
+                fig_heat = px.density_mapbox(grid_df, lat='Lat', lon='Lon', z='Conc', radius=10,
+                                             center={"lat": y.mean(), "lon": x.mean()}, zoom=14,
+                                             mapbox_style="stamen-terrain", height=600,
+                                             color_continuous_scale="Viridis")
+                # Add satellite back
+                fig_heat.update_layout(mapbox_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}])
+                st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("Need more data points to interpolate.")
 
         with t3:
-            st.subheader("Square Grid Aggregation")
-            # Rounding coordinates to create a grid. 0.00001 lat is roughly 1.1 meters.
-            step = 0.00001 * grid_res
-            df_grid = plot_df.copy()
-            df_grid['Lat_G'] = (df_grid['GPS_0020_Lat'] / step).round() * step
-            df_grid['Lon_G'] = (df_grid['GPS_0020_Lon'] / step).round() * step
-            df_grid = df_grid.groupby(['Lat_G', 'Lon_G'])[sel_sub].mean().reset_index()
-            
-            fig_sq = px.scatter_map(df_grid, lat='Lat_G', lon='Lon_G', color=sel_sub, size_max=12, zoom=18, color_continuous_scale="Viridis", height=700)
-            fig_sq.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
-            st.plotly_chart(fig_sq, use_container_width=True)
+            if not plot_df.empty:
+                fig_3d = px.scatter_3d(plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, color_continuous_scale="Viridis", height=600)
+                st.plotly_chart(fig_3d, use_container_width=True)
 
         with t4:
-            st.subheader("Interpolated Fluid Heatmap")
-            if len(plot_df) > 10:
-                res = 150 # Grid resolution
-                x, y, z = plot_df['GPS_0020_Lon'].values, plot_df['GPS_0020_Lat'].values, plot_df[sel_sub].values
-                grid_x, grid_y = np.mgrid[x.min():x.max():complex(res), y.min():y.max():complex(res)]
-                grid_z = griddata((x, y), z, (grid_x, grid_y), method='linear')
-                grid_z = gaussian_filter(grid_z, sigma=1.5) # Slight blur for fluidity
-                
-                # Flatten back to dataframe for plotting
-                df_interp = pd.DataFrame({'Lon': grid_x.flatten(), 'Lat': grid_y.flatten(), 'Val': grid_z.flatten()}).dropna()
-                fig_int = px.density_map(df_interp, lat='Lat', lon='Lon', z='Val', radius=5, zoom=18, color_continuous_scale="Viridis", height=700)
-                fig_int.update_layout(map_style="white-bg", map_layers=[{"below": 'traces', "sourcetype": "raster", "source": [esri_satellite]}])
-                st.plotly_chart(fig_int, use_container_width=True)
-            else:
-                st.info("Insufficient data points for interpolation.")
-
-        with t5:
-            st.subheader("3D Concentration Profiles")
-            fig_3d = px.scatter_3d(plot_df, x='GPS_0020_Lon', y='GPS_0020_Lat', z=sel_sub, color=sel_sub, color_continuous_scale="Viridis", height=700)
-            st.plotly_chart(fig_3d, use_container_width=True)
-
+            st.dataframe(plot_df)
+            st.download_button("Export CSV", plot_df.to_csv(index=False), "data.csv")
 else:
     st.info("👋 Please upload a .json file in the sidebar to begin.")
