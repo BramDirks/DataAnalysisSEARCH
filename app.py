@@ -7,9 +7,9 @@ import os
 from streamlit_plotly_events import plotly_events
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Grave Analysis Pro", layout="wide")
+st.set_page_config(page_title="Grave Analysis Dashboard", layout="wide")
 
-# Initialize Session State
+# Initialize Session State for manual exclusions
 if 'excluded_ids' not in st.session_state:
     st.session_state.excluded_ids = set()
 
@@ -38,45 +38,61 @@ def load_and_process_data(uploaded_file):
     df = pd.DataFrame(all_data)
     df['Time_Sec'] = (df['vT'] / 1000).round().astype(int)
     df = df.groupby('Time_Sec').first().reset_index()
+    # Unique ID for tracking manual selection
     df['point_id'] = df.index
     return df
 
-# --- SIDEBAR ---
+# --- SIDEBAR GUI ---
 st.sidebar.title("🛠️ Precise Control Panel")
+
 project_name = st.sidebar.text_input("Project Name", value="New Survey Site")
 
-st.sidebar.divider()
-# Switch between moving and drawing
-map_mode = st.sidebar.radio("Map Mouse Mode", ["Navigate (Zoom/Pan)", "Select (Lasso/Box)"])
-
-if st.sidebar.button("🔄 Reset All Manual Exclusions"):
+# Reset Button
+if st.sidebar.button("🔄 Reset Manual Exclusions"):
     st.session_state.excluded_ids = set()
     st.rerun()
 
-uploaded_file = st.sidebar.file_uploader("Upload .json file", type=["json"])
+uploaded_file = st.sidebar.file_uploader("Upload .json data file", type=["json"])
 
 if uploaded_file is not None:
     matrix_df = load_and_process_data(uploaded_file)
     
     if matrix_df is not None:
+        st.sidebar.success("Data Loaded!")
+        
         cols = [c for c in matrix_df.columns if 'STABSPECTRO' in c and not c.startswith('s')]
         sel_sub = st.sidebar.selectbox("Analyze Substance", cols)
 
-        # Apply Filtering Logic
+        # Filters
+        st.sidebar.subheader("📍 Precise Coordinates")
+        in_lat_min = st.sidebar.number_input("Min Lat", value=float(matrix_df['GPS_0020_Lat'].min()), format="%.6f")
+        in_lat_max = st.sidebar.number_input("Max Lat", value=float(matrix_df['GPS_0020_Lat'].max()), format="%.6f")
+        in_lon_min = st.sidebar.number_input("Min Lon", value=float(matrix_df['GPS_0020_Lon'].min()), format="%.6f")
+        in_lon_max = st.sidebar.number_input("Max Lon", value=float(matrix_df['GPS_0020_Lon'].max()), format="%.6f")
+
+        # --- DATA LOGIC ---
         df_f = matrix_df.copy()
+        df_f = df_f[df_f['GPS_0020_Lat'].between(in_lat_min, in_lat_max)]
+        df_f = df_f[df_f['GPS_0020_Lon'].between(in_lon_min, in_lon_max)]
+        
+        # Identify excluded points
         df_f['is_excluded'] = df_f['point_id'].isin(st.session_state.excluded_ids)
         active_df = df_f[~df_f['is_excluded']].dropna(subset=[sel_sub])
 
-        # --- MAIN DASHBOARD ---
+        # --- DASHBOARD ---
         st.title(f"⚰️ {project_name}")
         
-        t1, t2, t3 = st.tabs(["🗺️ Selection Map", "📈 3D View", "📋 Data"])
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Points Found", len(active_df))
+        m2.metric("Avg Conc", f"{active_df[sel_sub].mean():.3f}" if not active_df.empty else "0")
+        m3.metric("Manual Excluded", len(st.session_state.excluded_ids))
+
+        t1, t2, t3 = st.tabs(["🗺️ Selection Map", "📈 3D View", "📋 Raw Data"])
 
         with t1:
-            if map_mode == "Select (Lasso/Box)":
-                st.warning("✨ **Lasso Active**: Just click and drag on the map to exclude points.")
+            st.info("💡 **Lasso Tool**: Use the Lasso or Box Select icon in the map toolbar. Select points to exclude them.")
             
-            # Mapbox is required for stable selection tools
+            # We use Mapbox specifically here to support the modebar selection tools
             fig_map = px.scatter_mapbox(
                 df_f, lat='GPS_0020_Lat', lon='GPS_0020_Lon',
                 color=sel_sub, 
@@ -86,9 +102,6 @@ if uploaded_file is not None:
                 hover_data=['point_id']
             )
 
-            # Determine drag mode based on sidebar selection
-            active_drag_mode = 'lasso' if map_mode == "Select (Lasso/Box)" else 'pan'
-            
             fig_map.update_layout(
                 mapbox_style="white-bg",
                 mapbox_layers=[{
@@ -96,29 +109,22 @@ if uploaded_file is not None:
                     "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]
                 }],
                 margin={"r":0,"t":0,"l":0,"b":0},
-                dragmode=active_drag_mode,
-                modebar_visible=True, # FORCES toolbar to show
-                clickmode='event+select'
+                modebar_visible=True,
+                clickmode='event+select',
+                dragmode='lasso' # This activates the lasso by default!
             )
 
-            # Define the configuration to FORCE the display of the modebar
-            map_config = {
-                'displayModeBar': True, # ALWAYS show the bar
-                'modeBarButtonsToAdd': ['lasso2d', 'select2d'], # Explicitly add Lasso and Box
-                'displaylogo': False
-            }
-
-            # Render map with custom configuration
+            # Capture the selection
             selected_points = plotly_events(
                 fig_map, 
                 select_event=True, 
                 click_event=True, 
-                key=f"map_{map_mode}", 
-                override_height=750,
-                override_width='100%'
+                key="map_selection",
+                override_height=750
             )
 
             if selected_points:
+                # Get the IDs of selected points and add to session state
                 selected_ids = [df_f.iloc[p['pointIndex']]['point_id'] for p in selected_points]
                 st.session_state.excluded_ids.update(selected_ids)
                 st.rerun()
@@ -129,8 +135,8 @@ if uploaded_file is not None:
                 st.plotly_chart(fig_3d, use_container_width=True)
 
         with t3:
-            st.subheader("Data Matrix")
+            st.subheader("Data Table")
             st.dataframe(active_df, use_container_width=True)
 
 else:
-    st.info("👋 Upload a .json file to start.")
+    st.info("👋 Upload a .json file to begin.")
