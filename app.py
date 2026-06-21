@@ -63,7 +63,7 @@ if uploaded_file is not None:
         st.sidebar.divider()
 
         # 3. High-Precision Numerical Inputs (6 Decimals for sub-meter accuracy)
-        st.sidebar.subheader("📍 Area of Interest")
+        st.sidebar.subheader("Area of Interest")
         min_lat_val = float(matrix_df['GPS_0020_Lat'].min()) if 'GPS_0020_Lat' in matrix_df else 0.0
         max_lat_val = float(matrix_df['GPS_0020_Lat'].max()) if 'GPS_0020_Lat' in matrix_df else 0.0
         in_lat_min = st.sidebar.number_input("Min Latitude", value=min_lat_val, format="%.6f", step=0.00001)
@@ -77,7 +77,7 @@ if uploaded_file is not None:
         st.sidebar.divider()
 
         # 4. Advanced Operational Filters
-        st.sidebar.subheader("📏 Altitude & Speed")
+        st.sidebar.subheader("Altitude & Speed")
         h_min = st.sidebar.number_input("Min Height (m)", value=0.0, step=0.1)
         h_max = st.sidebar.number_input("Max Height (m)", value=60.0, step=0.1)
         
@@ -87,8 +87,17 @@ if uploaded_file is not None:
             s_min = st.sidebar.number_input("Min Walking Speed (m/s)", value=0.0, step=0.1)
             s_max = st.sidebar.number_input("Max Walking Speed (m/s)", value=float(matrix_df[speed_col].max()), step=0.1)
 
-        st.sidebar.subheader("✨ Noise Reduction")
+        st.sidebar.subheader("Noise Reduction")
         p_range = st.sidebar.slider("Concentration Percentile (Remove Outliers)", 0, 100, (0, 100))
+
+        st.sidebar.subheader("Heatmap Settings")
+        heatmap_opacity = st.sidebar.slider(
+            "Heatmap Opacity",
+            min_value=0.05,
+            max_value=1.0,
+            value=0.6,
+            step=0.05
+)
 
         # --- APPLY ALL FILTERS ---
         df_f = matrix_df.copy()
@@ -123,7 +132,7 @@ if uploaded_file is not None:
         )
 
         # --- MAIN DASHBOARD DISPLAY ---
-        st.title(f"⚰️ {project_name}")
+        st.title(f"{project_name}")
         
         # Key Performance Indicators
         m1, m2, m3 = st.columns(3)
@@ -132,7 +141,13 @@ if uploaded_file is not None:
         m3.metric("Max Concentration", f"{plot_df[sel_sub].max():.3f}" if not plot_df.empty else "0")
 
         # Tabs for different perspectives (Added Smart Detection)
-        t1, t2, t3, t4 = st.tabs(["🗺️ Satellite Map", "📈 3D View", "📋 Raw Data", "🔍 Smart Detection"])
+        t1, t2, t3, t4, t5 = st.tabs([
+        "🗺️ Satellite Map",
+        "📈 3D View",
+        "📋 Raw Data",
+        "🔥 Heatmap",
+        "🔍 Smart Detection"
+        ])
 
         with t1:
             if not plot_df.empty:
@@ -165,8 +180,41 @@ if uploaded_file is not None:
         with t3:
             st.subheader(f"Raw Matrix: {project_name}")
             st.dataframe(plot_df, use_container_width=True)
-
+            
         with t4:
+            st.subheader("Heatmap Visualization")
+
+            if not plot_df.empty:
+
+                fig_heat = px.density_map(
+                    plot_df,
+                    lat="GPS_0020_Lat",
+                    lon="GPS_0020_Lon",
+                    z=sel_sub,
+                    radius=12,
+                    zoom=19,
+                    height=750,
+                    opacity=heatmap_opacity,
+                    color_continuous_scale="Turbo"
+                )
+
+                fig_heat.update_layout(
+                    map_style="white-bg",
+                    map_layers=[{
+                        "below": "traces",
+                        "sourcetype": "raster",
+                        "source": [
+                            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                        ]
+                    }]
+                )
+
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+            else:
+                st.info("No data points available for heatmap generation.")
+
+        with t5:
             st.subheader("Automated Hotspot & Grave Detection")
             st.markdown("This tool uses **DBSCAN spatial clustering** to isolate anomalies. It filters for high concentrations of the selected substance and groups contiguous spikes into predicted grave locations.")
             
