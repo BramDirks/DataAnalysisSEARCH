@@ -39,7 +39,7 @@ def load_and_process_data(uploaded_file):
     return df.groupby('Time_Sec').first().reset_index()
 
 # --- SIDEBAR GUI ---
-st.sidebar.title("🛠️ Precise Control Panel")
+st.sidebar.title("Precise Control Panel")
 
 # 1. Project Management
 project_name = st.sidebar.text_input("Project Name", value="New Survey Site")
